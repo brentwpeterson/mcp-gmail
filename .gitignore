@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+
+# Never commit credentials or tokens
+credentials.json
+token.json
+
+# Local Claude Code settings
+.claude/
