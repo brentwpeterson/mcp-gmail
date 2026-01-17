@@ -49,7 +49,7 @@ gcloud services enable gmail.googleapis.com
 ### 4. Install and Build
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/mcp-gmail.git
+git clone https://github.com/brentwpeterson/mcp-gmail.git
 cd mcp-gmail
 npm install
 npm run build
