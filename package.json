@@ -1,6 +1,6 @@
 {
   "name": "mcp-gmail",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Gmail MCP server for Claude Code and other MCP clients",
   "author": "Brent Peterson",
   "license": "MIT",

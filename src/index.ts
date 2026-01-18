@@ -319,11 +319,223 @@ async function listLabels() {
   return response.data.labels || [];
 }
 
+// Draft functions
+async function listDrafts(maxResults: number = 10) {
+  const gmail = await getGmailClient();
+  const response = await gmail.users.drafts.list({
+    userId: "me",
+    maxResults,
+  });
+
+  const drafts = response.data.drafts || [];
+  const draftDetails = [];
+
+  for (const draft of drafts) {
+    const detail = await gmail.users.drafts.get({
+      userId: "me",
+      id: draft.id!,
+      format: "metadata",
+    });
+
+    const headers = detail.data.message?.payload?.headers || [];
+    draftDetails.push({
+      id: draft.id,
+      messageId: detail.data.message?.id,
+      threadId: detail.data.message?.threadId,
+      snippet: detail.data.message?.snippet,
+      to: headers.find((h) => h.name === "To")?.value,
+      subject: headers.find((h) => h.name === "Subject")?.value,
+      date: headers.find((h) => h.name === "Date")?.value,
+    });
+  }
+
+  return draftDetails;
+}
+
+async function getDraft(draftId: string) {
+  const gmail = await getGmailClient();
+  const response = await gmail.users.drafts.get({
+    userId: "me",
+    id: draftId,
+    format: "full",
+  });
+
+  const headers = response.data.message?.payload?.headers || [];
+
+  // Extract body
+  let body = "";
+  const payload = response.data.message?.payload;
+
+  if (payload?.body?.data) {
+    body = Buffer.from(payload.body.data, "base64").toString("utf-8");
+  } else if (payload?.parts) {
+    const textPart = payload.parts.find(
+      (p) => p.mimeType === "text/plain" || p.mimeType === "text/html"
+    );
+    if (textPart?.body?.data) {
+      body = Buffer.from(textPart.body.data, "base64").toString("utf-8");
+    }
+  }
+
+  return {
+    id: response.data.id,
+    messageId: response.data.message?.id,
+    threadId: response.data.message?.threadId,
+    to: headers.find((h) => h.name === "To")?.value,
+    subject: headers.find((h) => h.name === "Subject")?.value,
+    date: headers.find((h) => h.name === "Date")?.value,
+    body,
+  };
+}
+
+async function createDraft(to: string, subject: string, body: string, threadId?: string) {
+  const gmail = await getGmailClient();
+
+  // Get sender settings (name, email, signature)
+  const sender = await getSenderSettings();
+
+  // Convert plain text body to HTML
+  const escapeHtml = (text: string) =>
+    text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
+  const bodyHtml = escapeHtml(body).replace(/\n/g, "<br>\n");
+
+  // Build HTML email body with signature
+  const htmlBody = sender.signatureHtml
+    ? `<div>${bodyHtml}</div><br><div>--</div><br>${sender.signatureHtml}`
+    : `<div>${bodyHtml}</div>`;
+
+  // Build From header with display name
+  const fromHeader = sender.displayName
+    ? `From: ${sender.displayName} <${sender.email}>`
+    : `From: ${sender.email}`;
+
+  const message = [
+    fromHeader,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/html; charset=utf-8",
+    "",
+    htmlBody,
+  ].join("\n");
+
+  const encodedMessage = Buffer.from(message)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  const response = await gmail.users.drafts.create({
+    userId: "me",
+    requestBody: {
+      message: {
+        raw: encodedMessage,
+        threadId,
+      },
+    },
+  });
+
+  return {
+    id: response.data.id,
+    messageId: response.data.message?.id,
+    threadId: response.data.message?.threadId,
+  };
+}
+
+async function updateDraft(draftId: string, to: string, subject: string, body: string, threadId?: string) {
+  const gmail = await getGmailClient();
+
+  // Get sender settings
+  const sender = await getSenderSettings();
+
+  // Convert plain text body to HTML
+  const escapeHtml = (text: string) =>
+    text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
+  const bodyHtml = escapeHtml(body).replace(/\n/g, "<br>\n");
+
+  const htmlBody = sender.signatureHtml
+    ? `<div>${bodyHtml}</div><br><div>--</div><br>${sender.signatureHtml}`
+    : `<div>${bodyHtml}</div>`;
+
+  const fromHeader = sender.displayName
+    ? `From: ${sender.displayName} <${sender.email}>`
+    : `From: ${sender.email}`;
+
+  const message = [
+    fromHeader,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/html; charset=utf-8",
+    "",
+    htmlBody,
+  ].join("\n");
+
+  const encodedMessage = Buffer.from(message)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  const response = await gmail.users.drafts.update({
+    userId: "me",
+    id: draftId,
+    requestBody: {
+      message: {
+        raw: encodedMessage,
+        threadId,
+      },
+    },
+  });
+
+  return {
+    id: response.data.id,
+    messageId: response.data.message?.id,
+    threadId: response.data.message?.threadId,
+  };
+}
+
+async function deleteDraft(draftId: string) {
+  const gmail = await getGmailClient();
+  await gmail.users.drafts.delete({
+    userId: "me",
+    id: draftId,
+  });
+  return { deleted: true, id: draftId };
+}
+
+async function sendDraft(draftId: string) {
+  const gmail = await getGmailClient();
+  const response = await gmail.users.drafts.send({
+    userId: "me",
+    requestBody: {
+      id: draftId,
+    },
+  });
+  return {
+    sent: true,
+    messageId: response.data.id,
+    threadId: response.data.threadId,
+  };
+}
+
 // MCP Server setup
 const server = new Server(
   {
     name: "gmail",
-    version: "0.1.0",
+    version: "0.2.0",
   },
   {
     capabilities: {
@@ -467,6 +679,118 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {},
       },
     },
+    {
+      name: "gmail_list_drafts",
+      description: "List all email drafts in the account",
+      inputSchema: {
+        type: "object",
+        properties: {
+          maxResults: {
+            type: "number",
+            description: "Maximum number of drafts to return (default: 10)",
+            default: 10,
+          },
+        },
+      },
+    },
+    {
+      name: "gmail_get_draft",
+      description: "Get the full content of a specific draft by its ID",
+      inputSchema: {
+        type: "object",
+        properties: {
+          draftId: {
+            type: "string",
+            description: "The ID of the draft to retrieve",
+          },
+        },
+        required: ["draftId"],
+      },
+    },
+    {
+      name: "gmail_create_draft",
+      description: "Create a new email draft. The draft can be reviewed and sent later.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          to: {
+            type: "string",
+            description: "Recipient email address",
+          },
+          subject: {
+            type: "string",
+            description: "Email subject line",
+          },
+          body: {
+            type: "string",
+            description: "Email body content (plain text). Signature will be auto-appended.",
+          },
+          threadId: {
+            type: "string",
+            description: "Optional thread ID to create a draft reply to an existing conversation",
+          },
+        },
+        required: ["to", "subject", "body"],
+      },
+    },
+    {
+      name: "gmail_update_draft",
+      description: "Update an existing email draft with new content",
+      inputSchema: {
+        type: "object",
+        properties: {
+          draftId: {
+            type: "string",
+            description: "The ID of the draft to update",
+          },
+          to: {
+            type: "string",
+            description: "Recipient email address",
+          },
+          subject: {
+            type: "string",
+            description: "Email subject line",
+          },
+          body: {
+            type: "string",
+            description: "Email body content (plain text). Signature will be auto-appended.",
+          },
+          threadId: {
+            type: "string",
+            description: "Optional thread ID for reply drafts",
+          },
+        },
+        required: ["draftId", "to", "subject", "body"],
+      },
+    },
+    {
+      name: "gmail_delete_draft",
+      description: "Permanently delete an email draft",
+      inputSchema: {
+        type: "object",
+        properties: {
+          draftId: {
+            type: "string",
+            description: "The ID of the draft to delete",
+          },
+        },
+        required: ["draftId"],
+      },
+    },
+    {
+      name: "gmail_send_draft",
+      description: "Send an existing draft. This will move the draft to sent mail.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          draftId: {
+            type: "string",
+            description: "The ID of the draft to send",
+          },
+        },
+        required: ["draftId"],
+      },
+    },
   ],
 }));
 
@@ -524,6 +848,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "gmail_list_labels": {
         const result = await listLabels();
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gmail_list_drafts": {
+        const result = await listDrafts(args?.maxResults as number | undefined);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gmail_get_draft": {
+        const result = await getDraft(args?.draftId as string);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gmail_create_draft": {
+        const result = await createDraft(
+          args?.to as string,
+          args?.subject as string,
+          args?.body as string,
+          args?.threadId as string | undefined
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gmail_update_draft": {
+        const result = await updateDraft(
+          args?.draftId as string,
+          args?.to as string,
+          args?.subject as string,
+          args?.body as string,
+          args?.threadId as string | undefined
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gmail_delete_draft": {
+        const result = await deleteDraft(args?.draftId as string);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gmail_send_draft": {
+        const result = await sendDraft(args?.draftId as string);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
