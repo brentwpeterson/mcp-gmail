@@ -21,6 +21,8 @@ const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.send",
   "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/tasks",
 ];
 
 let oauth2Client: OAuth2Client | null = null;
@@ -55,6 +57,16 @@ async function getAuthenticatedClient(): Promise<OAuth2Client> {
 async function getGmailClient() {
   const auth = await getAuthenticatedClient();
   return google.gmail({ version: "v1", auth });
+}
+
+async function getCalendarClient() {
+  const auth = await getAuthenticatedClient();
+  return google.calendar({ version: "v3", auth });
+}
+
+async function getTasksClient() {
+  const auth = await getAuthenticatedClient();
+  return google.tasks({ version: "v1", auth });
 }
 
 // Cache for sender settings to avoid repeated API calls
@@ -531,11 +543,307 @@ async function sendDraft(draftId: string) {
   };
 }
 
+// Calendar functions
+async function listCalendars() {
+  const calendar = await getCalendarClient();
+  const response = await calendar.calendarList.list();
+
+  const calendars = response.data.items || [];
+  return calendars.map(cal => ({
+    id: cal.id,
+    summary: cal.summary,
+    description: cal.description,
+    primary: cal.primary || false,
+    accessRole: cal.accessRole,
+    backgroundColor: cal.backgroundColor,
+  }));
+}
+
+async function listCalendarEvents(
+  calendarId: string = "primary",
+  timeMin?: string,
+  timeMax?: string,
+  maxResults: number = 50
+) {
+  const calendar = await getCalendarClient();
+
+  // Default to now and 7 days from now
+  const now = new Date();
+  const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  const response = await calendar.events.list({
+    calendarId,
+    timeMin: timeMin || now.toISOString(),
+    timeMax: timeMax || weekFromNow.toISOString(),
+    maxResults,
+    singleEvents: true,
+    orderBy: "startTime",
+  });
+
+  const events = response.data.items || [];
+  return events.map(event => ({
+    id: event.id,
+    summary: event.summary,
+    description: event.description,
+    location: event.location,
+    start: event.start,
+    end: event.end,
+    status: event.status,
+    htmlLink: event.htmlLink,
+    attendees: event.attendees?.map(a => ({
+      email: a.email,
+      displayName: a.displayName,
+      responseStatus: a.responseStatus,
+      organizer: a.organizer,
+      self: a.self,
+    })),
+    organizer: event.organizer ? {
+      email: event.organizer.email,
+      displayName: event.organizer.displayName,
+      self: event.organizer.self,
+    } : undefined,
+    creator: event.creator ? {
+      email: event.creator.email,
+      displayName: event.creator.displayName,
+      self: event.creator.self,
+    } : undefined,
+  }));
+}
+
+async function getCalendarEvent(calendarId: string = "primary", eventId: string) {
+  const calendar = await getCalendarClient();
+
+  const response = await calendar.events.get({
+    calendarId,
+    eventId,
+  });
+
+  const event = response.data;
+  return {
+    id: event.id,
+    summary: event.summary,
+    description: event.description,
+    location: event.location,
+    start: event.start,
+    end: event.end,
+    status: event.status,
+    htmlLink: event.htmlLink,
+    hangoutLink: event.hangoutLink,
+    conferenceData: event.conferenceData,
+    attendees: event.attendees?.map(a => ({
+      email: a.email,
+      displayName: a.displayName,
+      responseStatus: a.responseStatus,
+      organizer: a.organizer,
+      self: a.self,
+      comment: a.comment,
+    })),
+    organizer: event.organizer ? {
+      email: event.organizer.email,
+      displayName: event.organizer.displayName,
+      self: event.organizer.self,
+    } : undefined,
+    creator: event.creator ? {
+      email: event.creator.email,
+      displayName: event.creator.displayName,
+      self: event.creator.self,
+    } : undefined,
+    recurrence: event.recurrence,
+    recurringEventId: event.recurringEventId,
+    created: event.created,
+    updated: event.updated,
+  };
+}
+
+// Google Tasks functions
+async function listTaskLists() {
+  const tasks = await getTasksClient();
+  const response = await tasks.tasklists.list({
+    maxResults: 100,
+  });
+
+  const taskLists = response.data.items || [];
+  return taskLists.map(list => ({
+    id: list.id,
+    title: list.title,
+    updated: list.updated,
+    selfLink: list.selfLink,
+  }));
+}
+
+async function listTasks(
+  taskListId: string = "@default",
+  showCompleted: boolean = false,
+  showHidden: boolean = false,
+  dueMin?: string,
+  dueMax?: string,
+  maxResults: number = 100
+) {
+  const tasks = await getTasksClient();
+  const response = await tasks.tasks.list({
+    tasklist: taskListId,
+    showCompleted,
+    showHidden,
+    dueMin,
+    dueMax,
+    maxResults,
+  });
+
+  const taskItems = response.data.items || [];
+  return taskItems.map(task => ({
+    id: task.id,
+    title: task.title,
+    notes: task.notes,
+    status: task.status,
+    due: task.due,
+    completed: task.completed,
+    parent: task.parent,
+    position: task.position,
+    updated: task.updated,
+    selfLink: task.selfLink,
+    links: task.links,
+  }));
+}
+
+async function getTask(taskListId: string = "@default", taskId: string) {
+  const tasks = await getTasksClient();
+  const response = await tasks.tasks.get({
+    tasklist: taskListId,
+    task: taskId,
+  });
+
+  const task = response.data;
+  return {
+    id: task.id,
+    title: task.title,
+    notes: task.notes,
+    status: task.status,
+    due: task.due,
+    completed: task.completed,
+    deleted: task.deleted,
+    hidden: task.hidden,
+    parent: task.parent,
+    position: task.position,
+    updated: task.updated,
+    selfLink: task.selfLink,
+    links: task.links,
+  };
+}
+
+async function createTask(
+  taskListId: string = "@default",
+  title: string,
+  notes?: string,
+  due?: string,
+  parent?: string
+) {
+  const tasks = await getTasksClient();
+  const response = await tasks.tasks.insert({
+    tasklist: taskListId,
+    requestBody: {
+      title,
+      notes,
+      due,
+    },
+    parent,
+  });
+
+  const task = response.data;
+  return {
+    id: task.id,
+    title: task.title,
+    notes: task.notes,
+    status: task.status,
+    due: task.due,
+    updated: task.updated,
+    selfLink: task.selfLink,
+  };
+}
+
+async function updateTask(
+  taskListId: string = "@default",
+  taskId: string,
+  title?: string,
+  notes?: string,
+  due?: string,
+  status?: string
+) {
+  const tasks = await getTasksClient();
+
+  // First get the current task to preserve fields we're not updating
+  const current = await tasks.tasks.get({
+    tasklist: taskListId,
+    task: taskId,
+  });
+
+  const response = await tasks.tasks.update({
+    tasklist: taskListId,
+    task: taskId,
+    requestBody: {
+      id: taskId,
+      title: title ?? current.data.title,
+      notes: notes ?? current.data.notes,
+      due: due ?? current.data.due,
+      status: status ?? current.data.status,
+    },
+  });
+
+  const task = response.data;
+  return {
+    id: task.id,
+    title: task.title,
+    notes: task.notes,
+    status: task.status,
+    due: task.due,
+    completed: task.completed,
+    updated: task.updated,
+    selfLink: task.selfLink,
+  };
+}
+
+async function completeTask(taskListId: string = "@default", taskId: string) {
+  const tasks = await getTasksClient();
+
+  // Get current task first
+  const current = await tasks.tasks.get({
+    tasklist: taskListId,
+    task: taskId,
+  });
+
+  const response = await tasks.tasks.update({
+    tasklist: taskListId,
+    task: taskId,
+    requestBody: {
+      id: taskId,
+      title: current.data.title,
+      status: "completed",
+    },
+  });
+
+  const task = response.data;
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    completed: task.completed,
+    updated: task.updated,
+  };
+}
+
+async function deleteTask(taskListId: string = "@default", taskId: string) {
+  const tasks = await getTasksClient();
+  await tasks.tasks.delete({
+    tasklist: taskListId,
+    task: taskId,
+  });
+  return { deleted: true, taskId };
+}
+
 // MCP Server setup
 const server = new Server(
   {
     name: "gmail",
-    version: "0.2.0",
+    version: "0.4.0",
   },
   {
     capabilities: {
@@ -791,6 +1099,231 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["draftId"],
       },
     },
+    // Google Calendar tools
+    {
+      name: "gcal_list_calendars",
+      description: "List all calendars accessible to the user (primary and shared calendars)",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "gcal_list_events",
+      description: "List upcoming calendar events. Defaults to primary calendar and next 7 days.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          calendarId: {
+            type: "string",
+            description: "Calendar ID to list events from (default: 'primary')",
+            default: "primary",
+          },
+          timeMin: {
+            type: "string",
+            description: "Start of time range (ISO 8601 format). Defaults to now.",
+          },
+          timeMax: {
+            type: "string",
+            description: "End of time range (ISO 8601 format). Defaults to 7 days from now.",
+          },
+          maxResults: {
+            type: "number",
+            description: "Maximum number of events to return (default: 50)",
+            default: 50,
+          },
+        },
+      },
+    },
+    {
+      name: "gcal_get_event",
+      description: "Get full details of a specific calendar event by its ID",
+      inputSchema: {
+        type: "object",
+        properties: {
+          eventId: {
+            type: "string",
+            description: "The ID of the event to retrieve",
+          },
+          calendarId: {
+            type: "string",
+            description: "Calendar ID containing the event (default: 'primary')",
+            default: "primary",
+          },
+        },
+        required: ["eventId"],
+      },
+    },
+    // Google Tasks tools
+    {
+      name: "gtasks_list_tasklists",
+      description: "List all task lists in Google Tasks",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "gtasks_list_tasks",
+      description: "List tasks from a task list. By default shows incomplete tasks from the default list.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskListId: {
+            type: "string",
+            description: "Task list ID (default: '@default' for the primary list)",
+            default: "@default",
+          },
+          showCompleted: {
+            type: "boolean",
+            description: "Include completed tasks (default: false)",
+            default: false,
+          },
+          showHidden: {
+            type: "boolean",
+            description: "Include hidden tasks (default: false)",
+            default: false,
+          },
+          dueMin: {
+            type: "string",
+            description: "Filter tasks due after this date (RFC 3339 format)",
+          },
+          dueMax: {
+            type: "string",
+            description: "Filter tasks due before this date (RFC 3339 format)",
+          },
+          maxResults: {
+            type: "number",
+            description: "Maximum number of tasks to return (default: 100)",
+            default: 100,
+          },
+        },
+      },
+    },
+    {
+      name: "gtasks_get_task",
+      description: "Get details of a specific task by ID",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: {
+            type: "string",
+            description: "The ID of the task to retrieve",
+          },
+          taskListId: {
+            type: "string",
+            description: "Task list ID containing the task (default: '@default')",
+            default: "@default",
+          },
+        },
+        required: ["taskId"],
+      },
+    },
+    {
+      name: "gtasks_create_task",
+      description: "Create a new task in Google Tasks",
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: {
+            type: "string",
+            description: "Title of the task",
+          },
+          notes: {
+            type: "string",
+            description: "Notes/description for the task",
+          },
+          due: {
+            type: "string",
+            description: "Due date (RFC 3339 format, e.g., '2026-01-20T00:00:00Z')",
+          },
+          taskListId: {
+            type: "string",
+            description: "Task list ID to add task to (default: '@default')",
+            default: "@default",
+          },
+          parent: {
+            type: "string",
+            description: "Parent task ID to create as a subtask",
+          },
+        },
+        required: ["title"],
+      },
+    },
+    {
+      name: "gtasks_update_task",
+      description: "Update an existing task (title, notes, due date, or status)",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: {
+            type: "string",
+            description: "The ID of the task to update",
+          },
+          taskListId: {
+            type: "string",
+            description: "Task list ID containing the task (default: '@default')",
+            default: "@default",
+          },
+          title: {
+            type: "string",
+            description: "New title for the task",
+          },
+          notes: {
+            type: "string",
+            description: "New notes for the task",
+          },
+          due: {
+            type: "string",
+            description: "New due date (RFC 3339 format)",
+          },
+          status: {
+            type: "string",
+            enum: ["needsAction", "completed"],
+            description: "Task status",
+          },
+        },
+        required: ["taskId"],
+      },
+    },
+    {
+      name: "gtasks_complete_task",
+      description: "Mark a task as completed",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: {
+            type: "string",
+            description: "The ID of the task to complete",
+          },
+          taskListId: {
+            type: "string",
+            description: "Task list ID containing the task (default: '@default')",
+            default: "@default",
+          },
+        },
+        required: ["taskId"],
+      },
+    },
+    {
+      name: "gtasks_delete_task",
+      description: "Delete a task permanently",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: {
+            type: "string",
+            description: "The ID of the task to delete",
+          },
+          taskListId: {
+            type: "string",
+            description: "Task list ID containing the task (default: '@default')",
+            default: "@default",
+          },
+        },
+        required: ["taskId"],
+      },
+    },
   ],
 }));
 
@@ -889,6 +1422,95 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "gmail_send_draft": {
         const result = await sendDraft(args?.draftId as string);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      // Google Calendar handlers
+      case "gcal_list_calendars": {
+        const result = await listCalendars();
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gcal_list_events": {
+        const result = await listCalendarEvents(
+          (args?.calendarId as string) || "primary",
+          args?.timeMin as string | undefined,
+          args?.timeMax as string | undefined,
+          (args?.maxResults as number) || 50
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gcal_get_event": {
+        const result = await getCalendarEvent(
+          (args?.calendarId as string) || "primary",
+          args?.eventId as string
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      // Google Tasks handlers
+      case "gtasks_list_tasklists": {
+        const result = await listTaskLists();
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gtasks_list_tasks": {
+        const result = await listTasks(
+          (args?.taskListId as string) || "@default",
+          (args?.showCompleted as boolean) || false,
+          (args?.showHidden as boolean) || false,
+          args?.dueMin as string | undefined,
+          args?.dueMax as string | undefined,
+          (args?.maxResults as number) || 100
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gtasks_get_task": {
+        const result = await getTask(
+          (args?.taskListId as string) || "@default",
+          args?.taskId as string
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gtasks_create_task": {
+        const result = await createTask(
+          (args?.taskListId as string) || "@default",
+          args?.title as string,
+          args?.notes as string | undefined,
+          args?.due as string | undefined,
+          args?.parent as string | undefined
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gtasks_update_task": {
+        const result = await updateTask(
+          (args?.taskListId as string) || "@default",
+          args?.taskId as string,
+          args?.title as string | undefined,
+          args?.notes as string | undefined,
+          args?.due as string | undefined,
+          args?.status as string | undefined
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gtasks_complete_task": {
+        const result = await completeTask(
+          (args?.taskListId as string) || "@default",
+          args?.taskId as string
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gtasks_delete_task": {
+        const result = await deleteTask(
+          (args?.taskListId as string) || "@default",
+          args?.taskId as string
+        );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
