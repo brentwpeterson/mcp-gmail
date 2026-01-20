@@ -21,6 +21,7 @@ const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.send",
   "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/calendar.readonly",
 ];
 
 let oauth2Client: OAuth2Client | null = null;
@@ -55,6 +56,11 @@ async function getAuthenticatedClient(): Promise<OAuth2Client> {
 async function getGmailClient() {
   const auth = await getAuthenticatedClient();
   return google.gmail({ version: "v1", auth });
+}
+
+async function getCalendarClient() {
+  const auth = await getAuthenticatedClient();
+  return google.calendar({ version: "v3", auth });
 }
 
 // Cache for sender settings to avoid repeated API calls
@@ -531,11 +537,123 @@ async function sendDraft(draftId: string) {
   };
 }
 
+// Calendar functions
+async function listCalendars() {
+  const calendar = await getCalendarClient();
+  const response = await calendar.calendarList.list();
+
+  const calendars = response.data.items || [];
+  return calendars.map(cal => ({
+    id: cal.id,
+    summary: cal.summary,
+    description: cal.description,
+    primary: cal.primary || false,
+    accessRole: cal.accessRole,
+    backgroundColor: cal.backgroundColor,
+  }));
+}
+
+async function listCalendarEvents(
+  calendarId: string = "primary",
+  timeMin?: string,
+  timeMax?: string,
+  maxResults: number = 50
+) {
+  const calendar = await getCalendarClient();
+
+  // Default to now and 7 days from now
+  const now = new Date();
+  const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  const response = await calendar.events.list({
+    calendarId,
+    timeMin: timeMin || now.toISOString(),
+    timeMax: timeMax || weekFromNow.toISOString(),
+    maxResults,
+    singleEvents: true,
+    orderBy: "startTime",
+  });
+
+  const events = response.data.items || [];
+  return events.map(event => ({
+    id: event.id,
+    summary: event.summary,
+    description: event.description,
+    location: event.location,
+    start: event.start,
+    end: event.end,
+    status: event.status,
+    htmlLink: event.htmlLink,
+    attendees: event.attendees?.map(a => ({
+      email: a.email,
+      displayName: a.displayName,
+      responseStatus: a.responseStatus,
+      organizer: a.organizer,
+      self: a.self,
+    })),
+    organizer: event.organizer ? {
+      email: event.organizer.email,
+      displayName: event.organizer.displayName,
+      self: event.organizer.self,
+    } : undefined,
+    creator: event.creator ? {
+      email: event.creator.email,
+      displayName: event.creator.displayName,
+      self: event.creator.self,
+    } : undefined,
+  }));
+}
+
+async function getCalendarEvent(calendarId: string = "primary", eventId: string) {
+  const calendar = await getCalendarClient();
+
+  const response = await calendar.events.get({
+    calendarId,
+    eventId,
+  });
+
+  const event = response.data;
+  return {
+    id: event.id,
+    summary: event.summary,
+    description: event.description,
+    location: event.location,
+    start: event.start,
+    end: event.end,
+    status: event.status,
+    htmlLink: event.htmlLink,
+    hangoutLink: event.hangoutLink,
+    conferenceData: event.conferenceData,
+    attendees: event.attendees?.map(a => ({
+      email: a.email,
+      displayName: a.displayName,
+      responseStatus: a.responseStatus,
+      organizer: a.organizer,
+      self: a.self,
+      comment: a.comment,
+    })),
+    organizer: event.organizer ? {
+      email: event.organizer.email,
+      displayName: event.organizer.displayName,
+      self: event.organizer.self,
+    } : undefined,
+    creator: event.creator ? {
+      email: event.creator.email,
+      displayName: event.creator.displayName,
+      self: event.creator.self,
+    } : undefined,
+    recurrence: event.recurrence,
+    recurringEventId: event.recurringEventId,
+    created: event.created,
+    updated: event.updated,
+  };
+}
+
 // MCP Server setup
 const server = new Server(
   {
     name: "gmail",
-    version: "0.2.0",
+    version: "0.3.0",
   },
   {
     capabilities: {
@@ -791,6 +909,61 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["draftId"],
       },
     },
+    // Google Calendar tools
+    {
+      name: "gcal_list_calendars",
+      description: "List all calendars accessible to the user (primary and shared calendars)",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "gcal_list_events",
+      description: "List upcoming calendar events. Defaults to primary calendar and next 7 days.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          calendarId: {
+            type: "string",
+            description: "Calendar ID to list events from (default: 'primary')",
+            default: "primary",
+          },
+          timeMin: {
+            type: "string",
+            description: "Start of time range (ISO 8601 format). Defaults to now.",
+          },
+          timeMax: {
+            type: "string",
+            description: "End of time range (ISO 8601 format). Defaults to 7 days from now.",
+          },
+          maxResults: {
+            type: "number",
+            description: "Maximum number of events to return (default: 50)",
+            default: 50,
+          },
+        },
+      },
+    },
+    {
+      name: "gcal_get_event",
+      description: "Get full details of a specific calendar event by its ID",
+      inputSchema: {
+        type: "object",
+        properties: {
+          eventId: {
+            type: "string",
+            description: "The ID of the event to retrieve",
+          },
+          calendarId: {
+            type: "string",
+            description: "Calendar ID containing the event (default: 'primary')",
+            default: "primary",
+          },
+        },
+        required: ["eventId"],
+      },
+    },
   ],
 }));
 
@@ -889,6 +1062,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "gmail_send_draft": {
         const result = await sendDraft(args?.draftId as string);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      // Google Calendar handlers
+      case "gcal_list_calendars": {
+        const result = await listCalendars();
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gcal_list_events": {
+        const result = await listCalendarEvents(
+          (args?.calendarId as string) || "primary",
+          args?.timeMin as string | undefined,
+          args?.timeMax as string | undefined,
+          (args?.maxResults as number) || 50
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gcal_get_event": {
+        const result = await getCalendarEvent(
+          (args?.calendarId as string) || "primary",
+          args?.eventId as string
+        );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
