@@ -1,6 +1,9 @@
 node_modules/
 dist/
 *.log
+.DS_Store
+testing/
+todo/
 
 # Never commit credentials or tokens
 credentials.json
