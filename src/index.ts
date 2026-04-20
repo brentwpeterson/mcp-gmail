@@ -137,7 +137,9 @@ async function listEmails(maxResults: number = 10, folder: string = "inbox", que
   const gmail = await getGmailClient();
 
   // Build the query: combine folder query with custom query if provided
-  const folderQuery = FOLDER_QUERIES[folder] || FOLDER_QUERIES.inbox;
+  // NOTE: use `in` (not ||) so folder "all" (empty string) isn't silently
+  // coerced back to inbox by truthy-fallback.
+  const folderQuery = folder in FOLDER_QUERIES ? FOLDER_QUERIES[folder] : FOLDER_QUERIES.inbox;
   const finalQuery = query ? `${folderQuery} ${query}`.trim() : folderQuery;
 
   const response = await gmail.users.messages.list({
@@ -173,6 +175,29 @@ async function listEmails(maxResults: number = 10, folder: string = "inbox", que
   return emails;
 }
 
+// Recursively walk payload parts and collect attachment metadata.
+// An attachment part is any part with both a filename and an attachmentId.
+function collectAttachments(
+  part: any,
+  acc: Array<{ attachmentId: string; filename: string; mimeType: string; size: number }> = []
+): Array<{ attachmentId: string; filename: string; mimeType: string; size: number }> {
+  if (!part) return acc;
+  if (part.filename && part.body?.attachmentId) {
+    acc.push({
+      attachmentId: part.body.attachmentId,
+      filename: part.filename,
+      mimeType: part.mimeType || "application/octet-stream",
+      size: part.body.size ?? 0,
+    });
+  }
+  if (Array.isArray(part.parts)) {
+    for (const sub of part.parts) {
+      collectAttachments(sub, acc);
+    }
+  }
+  return acc;
+}
+
 async function getEmail(messageId: string) {
   const gmail = await getGmailClient();
   const response = await gmail.users.messages.get({
@@ -198,6 +223,8 @@ async function getEmail(messageId: string) {
     }
   }
 
+  const attachments = collectAttachments(payload);
+
   return {
     id: response.data.id,
     threadId: response.data.threadId,
@@ -207,6 +234,31 @@ async function getEmail(messageId: string) {
     date: headers.find((h) => h.name === "Date")?.value,
     body,
     labelIds: response.data.labelIds,
+    attachments,
+  };
+}
+
+async function getAttachment(messageId: string, attachmentId: string, savePath: string) {
+  const gmail = await getGmailClient();
+  const response = await gmail.users.messages.attachments.get({
+    userId: "me",
+    messageId,
+    id: attachmentId,
+  });
+  const data = response.data.data;
+  if (!data) {
+    throw new Error(`Attachment ${attachmentId} on message ${messageId} returned no data`);
+  }
+  // Gmail returns URL-safe base64. Node's Buffer.from('base64') accepts both.
+  const buffer = Buffer.from(data, "base64");
+  const dir = path.dirname(savePath);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(savePath, buffer);
+  return {
+    savedTo: savePath,
+    size: buffer.length,
+    messageId,
+    attachmentId,
   };
 }
 
@@ -282,7 +334,11 @@ async function sendEmail(to: string, subject: string, body: string, threadId?: s
 }
 
 async function searchEmails(query: string, maxResults: number = 20) {
-  return listEmails(maxResults, query);
+  // Gmail web search defaults to all mail (not just inbox), so mirror that.
+  // Previous bug: `query` was passed as the `folder` arg, which matched no
+  // entry in FOLDER_QUERIES, fell through to inbox, and silently ignored
+  // the user's actual search query.
+  return listEmails(maxResults, "all", query);
 }
 
 async function getThread(threadId: string) {
@@ -880,7 +936,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "gmail_get_email",
-      description: "Get the full content of a specific email by its message ID",
+      description: "Get the full content of a specific email by its message ID. Returns body text plus an `attachments` array with {attachmentId, filename, mimeType, size} for each attached file. Use gmail_get_attachment to download an attachment's data.",
       inputSchema: {
         type: "object",
         properties: {
@@ -890,6 +946,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ["messageId"],
+      },
+    },
+    {
+      name: "gmail_get_attachment",
+      description: "Download an attachment from a Gmail message to a local file. Call gmail_get_email first to discover the attachmentId and filename.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          messageId: {
+            type: "string",
+            description: "The Gmail message ID that owns the attachment",
+          },
+          attachmentId: {
+            type: "string",
+            description: "The attachmentId returned in the `attachments` array from gmail_get_email",
+          },
+          savePath: {
+            type: "string",
+            description: "Absolute local file path to write the attachment to. Parent directories are created if missing.",
+          },
+        },
+        required: ["messageId", "attachmentId", "savePath"],
       },
     },
     {
@@ -1343,6 +1421,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "gmail_get_email": {
         const result = await getEmail(args?.messageId as string);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gmail_get_attachment": {
+        const result = await getAttachment(
+          args?.messageId as string,
+          args?.attachmentId as string,
+          args?.savePath as string,
+        );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
