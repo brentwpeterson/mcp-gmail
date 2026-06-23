@@ -22,6 +22,7 @@ const SCOPES = [
   "https://www.googleapis.com/auth/gmail.send",
   "https://www.googleapis.com/auth/gmail.modify",
   "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/tasks",
 ];
 
@@ -711,6 +712,99 @@ async function getCalendarEvent(calendarId: string = "primary", eventId: string)
   };
 }
 
+// Build a Calendar event time object. A bare date (YYYY-MM-DD) is treated as
+// an all-day event; anything else is treated as an RFC3339 dateTime.
+function buildEventTime(value: string, timeZone?: string) {
+  const isAllDay = /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+  if (isAllDay) {
+    return { date: value };
+  }
+  return timeZone ? { dateTime: value, timeZone } : { dateTime: value };
+}
+
+async function createCalendarEvent(
+  summary: string,
+  start: string,
+  end: string,
+  calendarId: string = "primary",
+  description?: string,
+  location?: string,
+  timeZone?: string,
+  attendees?: string[]
+) {
+  const calendar = await getCalendarClient();
+
+  const response = await calendar.events.insert({
+    calendarId,
+    requestBody: {
+      summary,
+      description,
+      location,
+      start: buildEventTime(start, timeZone),
+      end: buildEventTime(end, timeZone),
+      attendees: attendees?.map(email => ({ email })),
+    },
+  });
+
+  const event = response.data;
+  return {
+    id: event.id,
+    summary: event.summary,
+    description: event.description,
+    location: event.location,
+    start: event.start,
+    end: event.end,
+    status: event.status,
+    htmlLink: event.htmlLink,
+  };
+}
+
+async function updateCalendarEvent(
+  eventId: string,
+  calendarId: string = "primary",
+  summary?: string,
+  start?: string,
+  end?: string,
+  description?: string,
+  location?: string,
+  timeZone?: string,
+  attendees?: string[]
+) {
+  const calendar = await getCalendarClient();
+
+  const requestBody: Record<string, unknown> = {};
+  if (summary !== undefined) requestBody.summary = summary;
+  if (description !== undefined) requestBody.description = description;
+  if (location !== undefined) requestBody.location = location;
+  if (start !== undefined) requestBody.start = buildEventTime(start, timeZone);
+  if (end !== undefined) requestBody.end = buildEventTime(end, timeZone);
+  if (attendees !== undefined) requestBody.attendees = attendees.map(email => ({ email }));
+
+  const response = await calendar.events.patch({
+    calendarId,
+    eventId,
+    requestBody,
+  });
+
+  const event = response.data;
+  return {
+    id: event.id,
+    summary: event.summary,
+    description: event.description,
+    location: event.location,
+    start: event.start,
+    end: event.end,
+    status: event.status,
+    htmlLink: event.htmlLink,
+  };
+}
+
+async function deleteCalendarEvent(eventId: string, calendarId: string = "primary") {
+  const calendar = await getCalendarClient();
+  await calendar.events.delete({ calendarId, eventId });
+  return { deleted: true, eventId, calendarId };
+}
+
 // Google Tasks functions
 async function listTaskLists() {
   const tasks = await getTasksClient();
@@ -1232,6 +1326,117 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["eventId"],
       },
     },
+    {
+      name: "gcal_create_event",
+      description: "Create a new calendar event. Use RFC3339 datetimes with an offset (e.g. '2026-06-23T14:00:00-05:00') for timed events, or a bare date ('2026-06-23') for an all-day event.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          summary: {
+            type: "string",
+            description: "Event title/summary",
+          },
+          start: {
+            type: "string",
+            description: "Start time. RFC3339 datetime (e.g. '2026-06-23T14:00:00-05:00') or a bare date 'YYYY-MM-DD' for an all-day event.",
+          },
+          end: {
+            type: "string",
+            description: "End time. RFC3339 datetime or a bare date 'YYYY-MM-DD' for an all-day event.",
+          },
+          calendarId: {
+            type: "string",
+            description: "Calendar ID to create the event in (default: 'primary')",
+            default: "primary",
+          },
+          description: {
+            type: "string",
+            description: "Event description/notes",
+          },
+          location: {
+            type: "string",
+            description: "Event location",
+          },
+          timeZone: {
+            type: "string",
+            description: "IANA time zone (e.g. 'America/Chicago'). Optional when start/end already include an offset.",
+          },
+          attendees: {
+            type: "array",
+            items: { type: "string" },
+            description: "List of attendee email addresses",
+          },
+        },
+        required: ["summary", "start", "end"],
+      },
+    },
+    {
+      name: "gcal_update_event",
+      description: "Update (reschedule/edit) an existing calendar event. Only the fields you provide are changed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          eventId: {
+            type: "string",
+            description: "The ID of the event to update",
+          },
+          calendarId: {
+            type: "string",
+            description: "Calendar ID containing the event (default: 'primary')",
+            default: "primary",
+          },
+          summary: {
+            type: "string",
+            description: "New event title/summary",
+          },
+          start: {
+            type: "string",
+            description: "New start time. RFC3339 datetime or bare date 'YYYY-MM-DD'.",
+          },
+          end: {
+            type: "string",
+            description: "New end time. RFC3339 datetime or bare date 'YYYY-MM-DD'.",
+          },
+          description: {
+            type: "string",
+            description: "New event description/notes",
+          },
+          location: {
+            type: "string",
+            description: "New event location",
+          },
+          timeZone: {
+            type: "string",
+            description: "IANA time zone (e.g. 'America/Chicago'). Optional when start/end already include an offset.",
+          },
+          attendees: {
+            type: "array",
+            items: { type: "string" },
+            description: "Replacement list of attendee email addresses",
+          },
+        },
+        required: ["eventId"],
+      },
+    },
+    {
+      name: "gcal_delete_event",
+      description: "Delete a calendar event by its ID",
+      inputSchema: {
+        type: "object",
+        properties: {
+          eventId: {
+            type: "string",
+            description: "The ID of the event to delete",
+          },
+          calendarId: {
+            type: "string",
+            description: "Calendar ID containing the event (default: 'primary')",
+            default: "primary",
+          },
+        },
+        required: ["eventId"],
+      },
+    },
     // Google Tasks tools
     {
       name: "gtasks_list_tasklists",
@@ -1532,6 +1737,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await getCalendarEvent(
           (args?.calendarId as string) || "primary",
           args?.eventId as string
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gcal_create_event": {
+        const result = await createCalendarEvent(
+          args?.summary as string,
+          args?.start as string,
+          args?.end as string,
+          (args?.calendarId as string) || "primary",
+          args?.description as string | undefined,
+          args?.location as string | undefined,
+          args?.timeZone as string | undefined,
+          args?.attendees as string[] | undefined
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gcal_update_event": {
+        const result = await updateCalendarEvent(
+          args?.eventId as string,
+          (args?.calendarId as string) || "primary",
+          args?.summary as string | undefined,
+          args?.start as string | undefined,
+          args?.end as string | undefined,
+          args?.description as string | undefined,
+          args?.location as string | undefined,
+          args?.timeZone as string | undefined,
+          args?.attendees as string[] | undefined
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "gcal_delete_event": {
+        const result = await deleteCalendarEvent(
+          args?.eventId as string,
+          (args?.calendarId as string) || "primary"
         );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
