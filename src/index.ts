@@ -263,7 +263,7 @@ async function getAttachment(messageId: string, attachmentId: string, savePath: 
   };
 }
 
-async function sendEmail(to: string, subject: string, body: string, threadId?: string, originalMessageId?: string) {
+async function sendEmail(to: string, subject: string, body: string, threadId?: string, originalMessageId?: string, html: boolean = false) {
   const gmail = await getGmailClient();
 
   // Get sender settings (name, email, signature)
@@ -278,7 +278,10 @@ async function sendEmail(to: string, subject: string, body: string, threadId?: s
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
 
-  const bodyHtml = escapeHtml(body).replace(/\n/g, "<br>\n");
+  // When html=true, pass the body through as raw HTML (e.g. a styled report
+  // table). Otherwise treat it as plain text: escape it and turn newlines into
+  // <br> as before. The message is sent text/html either way.
+  const bodyHtml = html ? body : escapeHtml(body).replace(/\n/g, "<br>\n");
 
   // Build HTML email body with signature
   const htmlBody = sender.signatureHtml
@@ -457,7 +460,7 @@ async function getDraft(draftId: string) {
   };
 }
 
-async function createDraft(to: string, subject: string, body: string, threadId?: string) {
+async function createDraft(to: string, subject: string, body: string, threadId?: string, html: boolean = false) {
   const gmail = await getGmailClient();
 
   // Get sender settings (name, email, signature)
@@ -472,7 +475,10 @@ async function createDraft(to: string, subject: string, body: string, threadId?:
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
 
-  const bodyHtml = escapeHtml(body).replace(/\n/g, "<br>\n");
+  // When html=true, pass the body through as raw HTML (e.g. a styled report
+  // table). Otherwise treat it as plain text: escape it and turn newlines into
+  // <br> as before. The message is sent text/html either way.
+  const bodyHtml = html ? body : escapeHtml(body).replace(/\n/g, "<br>\n");
 
   // Build HTML email body with signature
   const htmlBody = sender.signatureHtml
@@ -517,7 +523,7 @@ async function createDraft(to: string, subject: string, body: string, threadId?:
   };
 }
 
-async function updateDraft(draftId: string, to: string, subject: string, body: string, threadId?: string) {
+async function updateDraft(draftId: string, to: string, subject: string, body: string, threadId?: string, html: boolean = false) {
   const gmail = await getGmailClient();
 
   // Get sender settings
@@ -532,7 +538,10 @@ async function updateDraft(draftId: string, to: string, subject: string, body: s
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
 
-  const bodyHtml = escapeHtml(body).replace(/\n/g, "<br>\n");
+  // When html=true, pass the body through as raw HTML (e.g. a styled report
+  // table). Otherwise treat it as plain text: escape it and turn newlines into
+  // <br> as before. The message is sent text/html either way.
+  const bodyHtml = html ? body : escapeHtml(body).replace(/\n/g, "<br>\n");
 
   const htmlBody = sender.signatureHtml
     ? `<div>${bodyHtml}</div><br><div>--</div><br>${sender.signatureHtml}`
@@ -1090,6 +1099,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "The message ID of the email being replied to (required for proper threading)",
           },
+          html: {
+            type: "boolean",
+            description: "If true, the body is sent as raw HTML (for styled tables, etc.) instead of being escaped as plain text. Default false.",
+          },
         },
         required: ["to", "subject", "body"],
       },
@@ -1209,6 +1222,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Optional thread ID to create a draft reply to an existing conversation",
           },
+          html: {
+            type: "boolean",
+            description: "If true, the body is sent as raw HTML (for styled tables, etc.) instead of being escaped as plain text. Default false.",
+          },
         },
         required: ["to", "subject", "body"],
       },
@@ -1238,6 +1255,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           threadId: {
             type: "string",
             description: "Optional thread ID for reply drafts",
+          },
+          html: {
+            type: "boolean",
+            description: "If true, the body is sent as raw HTML (for styled tables, etc.) instead of being escaped as plain text. Default false.",
           },
         },
         required: ["draftId", "to", "subject", "body"],
@@ -1644,7 +1665,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args?.subject as string,
           args?.body as string,
           args?.threadId as string | undefined,
-          args?.replyToMessageId as string | undefined
+          args?.replyToMessageId as string | undefined,
+          Boolean(args?.html)
         );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -1691,7 +1713,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args?.to as string,
           args?.subject as string,
           args?.body as string,
-          args?.threadId as string | undefined
+          args?.threadId as string | undefined,
+          Boolean(args?.html)
         );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -1702,7 +1725,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args?.to as string,
           args?.subject as string,
           args?.body as string,
-          args?.threadId as string | undefined
+          args?.threadId as string | undefined,
+          Boolean(args?.html)
         );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
