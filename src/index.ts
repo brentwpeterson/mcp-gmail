@@ -263,7 +263,7 @@ async function getAttachment(messageId: string, attachmentId: string, savePath: 
   };
 }
 
-async function sendEmail(to: string, subject: string, body: string, threadId?: string, originalMessageId?: string, html: boolean = false) {
+async function sendEmail(to: string, subject: string, body: string, threadId?: string, originalMessageId?: string, html: boolean = false, cc?: string, bcc?: string) {
   const gmail = await getGmailClient();
 
   // Get sender settings (name, email, signature)
@@ -297,10 +297,15 @@ async function sendEmail(to: string, subject: string, body: string, threadId?: s
   const headers: string[] = [
     fromHeader,
     `To: ${to}`,
+  ];
+  // Cc/Bcc are omitted entirely when empty — an empty header confuses some clients.
+  if (cc && cc.trim()) headers.push(`Cc: ${cc}`);
+  if (bcc && bcc.trim()) headers.push(`Bcc: ${bcc}`);
+  headers.push(
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
     "Content-Type: text/html; charset=utf-8",
-  ];
+  );
 
   // If replying to a thread, add threading headers
   if (threadId && originalMessageId) {
@@ -460,7 +465,7 @@ async function getDraft(draftId: string) {
   };
 }
 
-async function createDraft(to: string, subject: string, body: string, threadId?: string, html: boolean = false) {
+async function createDraft(to: string, subject: string, body: string, threadId?: string, html: boolean = false, cc?: string, bcc?: string) {
   const gmail = await getGmailClient();
 
   // Get sender settings (name, email, signature)
@@ -490,15 +495,20 @@ async function createDraft(to: string, subject: string, body: string, threadId?:
     ? `From: ${sender.displayName} <${sender.email}>`
     : `From: ${sender.email}`;
 
-  const message = [
+  const headers: string[] = [
     fromHeader,
     `To: ${to}`,
+  ];
+  // Cc/Bcc are omitted entirely when empty — an empty header confuses some clients.
+  if (cc && cc.trim()) headers.push(`Cc: ${cc}`);
+  if (bcc && bcc.trim()) headers.push(`Bcc: ${bcc}`);
+  headers.push(
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
     "Content-Type: text/html; charset=utf-8",
-    "",
-    htmlBody,
-  ].join("\n");
+  );
+
+  const message = [...headers, "", htmlBody].join("\n");
 
   const encodedMessage = Buffer.from(message)
     .toString("base64")
@@ -523,7 +533,7 @@ async function createDraft(to: string, subject: string, body: string, threadId?:
   };
 }
 
-async function updateDraft(draftId: string, to: string, subject: string, body: string, threadId?: string, html: boolean = false) {
+async function updateDraft(draftId: string, to: string, subject: string, body: string, threadId?: string, html: boolean = false, cc?: string, bcc?: string) {
   const gmail = await getGmailClient();
 
   // Get sender settings
@@ -551,15 +561,20 @@ async function updateDraft(draftId: string, to: string, subject: string, body: s
     ? `From: ${sender.displayName} <${sender.email}>`
     : `From: ${sender.email}`;
 
-  const message = [
+  const headers: string[] = [
     fromHeader,
     `To: ${to}`,
+  ];
+  // Cc/Bcc are omitted entirely when empty — an empty header confuses some clients.
+  if (cc && cc.trim()) headers.push(`Cc: ${cc}`);
+  if (bcc && bcc.trim()) headers.push(`Bcc: ${bcc}`);
+  headers.push(
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
     "Content-Type: text/html; charset=utf-8",
-    "",
-    htmlBody,
-  ].join("\n");
+  );
+
+  const message = [...headers, "", htmlBody].join("\n");
 
   const encodedMessage = Buffer.from(message)
     .toString("base64")
@@ -1081,7 +1096,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           to: {
             type: "string",
-            description: "Recipient email address",
+            description: "Recipient email address. Comma-separate multiple addresses.",
           },
           subject: {
             type: "string",
@@ -1098,6 +1113,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           replyToMessageId: {
             type: "string",
             description: "The message ID of the email being replied to (required for proper threading)",
+          },
+          cc: {
+            type: "string",
+            description: "Optional CC recipients. Comma-separate multiple addresses.",
+          },
+          bcc: {
+            type: "string",
+            description: "Optional BCC recipients. Comma-separate multiple addresses.",
           },
           html: {
             type: "boolean",
@@ -1208,7 +1231,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           to: {
             type: "string",
-            description: "Recipient email address",
+            description: "Recipient email address. Comma-separate multiple addresses.",
           },
           subject: {
             type: "string",
@@ -1221,6 +1244,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           threadId: {
             type: "string",
             description: "Optional thread ID to create a draft reply to an existing conversation",
+          },
+          cc: {
+            type: "string",
+            description: "Optional CC recipients. Comma-separate multiple addresses.",
+          },
+          bcc: {
+            type: "string",
+            description: "Optional BCC recipients. Comma-separate multiple addresses.",
           },
           html: {
             type: "boolean",
@@ -1242,7 +1273,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           to: {
             type: "string",
-            description: "Recipient email address",
+            description: "Recipient email address. Comma-separate multiple addresses.",
           },
           subject: {
             type: "string",
@@ -1255,6 +1286,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           threadId: {
             type: "string",
             description: "Optional thread ID for reply drafts",
+          },
+          cc: {
+            type: "string",
+            description: "Optional CC recipients. Comma-separate multiple addresses.",
+          },
+          bcc: {
+            type: "string",
+            description: "Optional BCC recipients. Comma-separate multiple addresses.",
           },
           html: {
             type: "boolean",
@@ -1666,7 +1705,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args?.body as string,
           args?.threadId as string | undefined,
           args?.replyToMessageId as string | undefined,
-          Boolean(args?.html)
+          Boolean(args?.html),
+          args?.cc as string | undefined,
+          args?.bcc as string | undefined
         );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -1714,7 +1755,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args?.subject as string,
           args?.body as string,
           args?.threadId as string | undefined,
-          Boolean(args?.html)
+          Boolean(args?.html),
+          args?.cc as string | undefined,
+          args?.bcc as string | undefined
         );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
@@ -1726,7 +1769,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args?.subject as string,
           args?.body as string,
           args?.threadId as string | undefined,
-          Boolean(args?.html)
+          Boolean(args?.html),
+          args?.cc as string | undefined,
+          args?.bcc as string | undefined
         );
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
