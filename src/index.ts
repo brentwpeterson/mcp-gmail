@@ -27,9 +27,17 @@ const SCOPES = [
 ];
 
 let oauth2Client: OAuth2Client | null = null;
+// token.json mtime the cached client was built from. Re-running `npm run auth`
+// rewrites the file; without this check the running server kept the dead
+// grant and every call failed invalid_grant until the MCP was restarted
+// (2026-11-02, Velocity draft blocked after a successful re-auth).
+let tokenMtimeMs = 0;
 
 async function getAuthenticatedClient(): Promise<OAuth2Client> {
-  if (oauth2Client) return oauth2Client;
+  const mtime = fs.existsSync(TOKEN_PATH) ? fs.statSync(TOKEN_PATH).mtimeMs : 0;
+  if (oauth2Client && mtime === tokenMtimeMs) return oauth2Client;
+  oauth2Client = null;
+  tokenMtimeMs = mtime;
 
   if (!fs.existsSync(CREDENTIALS_PATH)) {
     throw new Error(
